@@ -3664,9 +3664,13 @@ Note that cross products aren't handled by the vector library; these are conside
 than being explicitly generalized.
 
   $.linear = capture [vector(n,    prefix) = {} /base_functions /-$.merge/ high_level_v_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_v_functions_for(n)],
-                      matrix(n, m, prefix) = raise [new Error('not yet implemented')]],
+                      matrix(n, m, prefix) = {} /base_functions /-$.merge/ high_level_m_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_m_functions_for(n, m)]],
 
   where [rename(o, prefix)                = o %k*['#{prefix || ""}#{x}'] -seq,
+
+Vector functions.
+These are fairly standard vector functions. I've left some out because they really should be part of the matrix library; examples of this are things like the cross-product operator, which is
+just a matrix determinant.
 
          base_v_functions_for(n)          = capture [plus  = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] + b[i]'.qs),  times = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b[i]'.qs),
                                                      minus = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] - b[i]'.qs),  scale = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b'.qs),
@@ -3682,7 +3686,28 @@ than being explicitly generalized.
 
                                     -where [ref_compile(functions, formals, body) = $.compile('(function (_formals) {return _e})'.qs /~replace/
                                                                                               {_formals: formals,
-                                                                                               _e:       body |~replace| functions %v*[new $.ref(x)] -seq})]]})(caterwaul);
+                                                                                               _e:       body |~replace| functions %v*[new $.ref(x)] -seq})],
+
+Matrix functions.
+Most of these are standard textbook functions, though there some of them are peculiar to this data representation. In particular, all matrix coordinates are unrolled; this means that some
+weird optimizations can happen. Vector functions were essentially flat; there was very little repetitive access to sub-arrays. This isn't true of matrices, however. Consider a simple
+coordinate-wise addition function over 2x2 matrices:
+
+| plus(a, b) = [[a[0][0] + b[0][0], a[0][1] + b[0][1]],
+                [a[1][0] + b[1][0], a[1][1] + b[1][1]]]
+
+Each top-level sub-array in a and b is accessed twice (that is, a[0], a[1], b[0], and b[1]), and unless the Javascript runtime is clever enough to prove their invariance, these loads will
+happen twice. Rather than explicitly loading the sub-arrays twice, better is to perform common subexpression elimination and allocate local variables to cache the lookups:
+
+| plus = function (a, b) {
+    var a0 = a[0], a1 = a[1], b0 = b[0], b1 = b[1];
+    return [[a0[0] + b0[0], a0[1] + b0[1]],
+            [a1[0] + b1[0], a1[1] + b1[1]]];
+  };
+
+// TODO
+
+                                                                                               ]})(caterwaul);
 
 __
 meta::sdoc('js::modules', <<'__');

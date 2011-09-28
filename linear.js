@@ -61,8 +61,8 @@ caterwaul.js_all()(function ($) {
 // Note that cross products aren't handled by the vector library; these are considered to be matrix functions, and the determinant formula is computed specifically for a given matrix size rather
 // than being explicitly generalized.
 
-  $.linear = capture [vector(n,    prefix) = {} /base_functions /-$.merge/ high_level_v_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_v_functions_for(n)],
-                      matrix(n, m, prefix) = {} /base_functions /-$.merge/ high_level_m_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_m_functions_for(n, m)]],
+  $.linear = capture [vector(n, prefix) = {} /base_functions /-$.merge/ high_level_v_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_v_functions_for(n)],
+                      matrix(n, prefix) = {} /base_functions /-$.merge/ high_level_m_functions_for(base_functions) /-rename/ prefix -where [base_functions = base_m_functions_for(n)]],
 
   where [rename(o, prefix)                = o %k*['#{prefix || ""}#{x}'] -seq,
 
@@ -103,7 +103,13 @@ caterwaul.js_all()(function ($) {
 //             [a1[0] + b1[0], a1[1] + b1[1]]];
 //   };
 
-// TODO
+// Matrix functions are structured roughly the same way as vector functions from a compilation perspective. It's a bit more complicated here because there are two levels of reduction instead of
+// one. Some things are also complexified by conditions on the matrix size; for instance, the determinant only exists for square matrices. (Fortunately, this library only provides functions for
+// square matrices.)
+
+// There are some compromises made for performance. In particular, matrix and vector are untyped, so it doesn't make sense to compute a cross product in the usual vector way. (That is, set the
+// top row of the matrix to contain vectors instead of scalars.) Instead, the cross product is a special form of the determinant; this preserves the untyped representation. In addition to things
+// like this, various safety rules are ignored; for instance, there is no size-checking despite the fact that every function operates only on matrices of specific dimensions.
 
                                                                                                ]})(caterwaul);
 

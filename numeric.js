@@ -36,27 +36,8 @@ caterwaul.js_all()(function ($) {
 
 // Most simple vector functions can be defined this way. Others, however, are better defined in terms of each other; for instance, the 'proj' and 'orth' functions never access the vectors
 // directly since they are defined in terms of the dot product and vector-scalar multiplication. The obvious solution is to first create the reduction functions and then define things like 'proj'
-// and 'orth' to close over them; however, this is problematic from a compilation perspective since we would need the closure state to know the dimension of 'proj' and 'orth'. (Not problematic if
-// we compile it here, but problematic if we push it off to the numerical compiler.)
-
-// Better is to inline the functions using compile-time beta expansion. This follows a fairly standard form; inlining a function f within an expression involves allocating a variable for each
-// formal, then replacing the function call with the returned expression (after substituting formal names). So, for instance, if we had this setup:
-
-// | plus(a, b) = [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
-//   twice(a)   = a /-plus/ a
-
-// We could inline 'plus' into 'twice' like this:
-
-// | twice = function (a) {
-//     var p1 = a;
-//     var p2 = a;
-//     return [p1[0] + p2[0], p1[1] + p2[1], p1[2] + p2[2]];
-//   }
-
-// This code contains no closures or other functional elements, so the numerical compiler will have an easy time inlining it further to eliminate the array allocation. Note, however, that this
-// strategy doesn't eliminate unnecessary intermediate array allocations. That's also a job for the numerical compiler.
-
-// Caveat: I don't have inlining implemented yet. Right now I'm just compiling any function names into refs and relying on the runtime to inline things.
+// and 'orth' to close over them; however, this is problematic from a compilation perspective since we would need the closure state to know the dimension of 'proj' and 'orth'. To compensate, the
+// syntax tree is stored as an attribute of the compiled function, and the syntax tree contains refs which bind all closure dependencies.
 
 // Note that cross products aren't handled by the vector library; these are considered to be matrix functions, and the determinant formula is computed specifically for a given matrix size rather
 // than being explicitly generalized.
@@ -65,35 +46,55 @@ caterwaul.js_all()(function ($) {
 //   An extra parameter, 'field', lets you redefine algebraic field operations. This can be useful if you want to build vectors or matrices over non-scalar data structures. In particular, if you
 //   specify this parameter you'll need to provide replacements for +, -, *, and /. Here's an example for working with complex numbers:
 
-  // | my_field = {'+': '{r: x.r + y.r, i: x.i + y.i}'.qs,
-//                 '-': '{r: x.r - y.r, i: x.i + y.i}'.qs,
-//                 '*': '{r: x.r * x.r - x.i * y.i, i: 2 * x.i * y.i}'.qs,
-//                 '/': '{r: (x.r*y.r + x.i*y.i) / (y.r*y.r + y.i*y.i), i: (x.i*y.r - x.r*y.i) / (y.r*y.r + y.i*y.i)}'.qs}
+  // | my_field = {'+': '{r: _x.r + _y.r, i: _x.i + _y.i}'.qs,
+//                 '-': '{r: _x.r - _y.r, i: _x.i + _y.i}'.qs,
+//                 '*': '{r: _x.r * _x.r - _x.i * _y.i, i: 2 * _x.i * _y.i}'.qs,
+//                 '/': '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i), i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs}
 
-  // These expressions will then replace the real-number field used by default. Note here that the complex conjugate operation has duplicated subexpressions; y.r*y.r + y.i*y.i is computed twice.
-//   This won't be a problem in the compiled function because all of the expressions are subject to common subexpression elimination prior to being compiled. (This is the mechanism used to
-//   optimize matrix array access as well.) Because of this optimization, it's very important that any side-effects of each subexpression be idempotent and reorderable.
+  // These expressions will then replace the real-number field used by default. Note here that the complex conjugate operation has duplicated subexpressions; _y.r*_y.r + _y.i*_y.i is computed
+//   twice. This won't be a problem in the compiled function because all of the expressions are subject to common subexpression elimination prior to being compiled. (This is the mechanism used to
+//   optimize matrix array access as well.) Because of this optimization, it's very important that any side-effects of each subexpression be idempotent and commutative.
+
+  // You can reuse existing functions as well as defining them on the fly. You should do this using syntax refs:
+
+  // | my_field = {'+': 'f(_x, _y)'.qs.replace({f: new caterwaul.ref(my_function)}), ...}
+
+  // If you want your functions to be optimized, then you should define them with a '.tree' attribute that points to the syntax tree of their return value. This lets optimization stages access
+//   their closure state and potentially eliminate the function call altogether.
 
   $.linear = capture [vector(n, prefix, field) = {} /base_functions /-$.merge/ high_level_v(base_functions) /-rename/ prefix -where [base_functions = base_v(n, field || scalar_ops)],
-                      matrix(n, prefix, field) = {} /base_functions /-$.merge/ high_level_m(base_functions) /-rename/ prefix -where [base_functions = base_m(n, field || scalar_ops)]],
+                      matrix(n, prefix, field) = {} /base_functions /-$.merge/ high_level_m(base_functions) /-rename/ prefix -where [base_functions = base_m(n, field || scalar_ops)],
+
+                      complex_ops = {'+': '{r: _x.r + _y.r, i: _x.i + _y.i}'.qs,
+                                     '-': '{r: _x.r - _y.r, i: _x.i + _y.i}'.qs,
+                                     '*': '{r: _x.r * _x.r - _x.i * _y.i, i: 2 * _x.i * _y.i}'.qs,
+                                     '/': '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i), i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs}],
 
   where [rename(o, prefix)  = o %k*['#{prefix || ""}#{x}'] -seq,
+         scalar_ops         = {},
 
-         base_v(n)          = capture [plus  = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] + b[i]'.qs),  times = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b[i]'.qs),
+         base_v(n, field)   = capture [plus  = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] + b[i]'.qs),  times = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b[i]'.qs),
                                        minus = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] - b[i]'.qs),  scale = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b'.qs),
                                        dot   = r(n, 'a, b'.qs, 'x'.qs, 'x + y'.qs, 'a[i] * b[i]'.qs),   norm  = r(n, 'a'.qs, 'Math.sqrt(x)'.qs, 'x + y'.qs, 'a[i] * a[i]'.qs)]
 
-                      -where [r(n, formals, wrap, fold, each) = f /!$.compile -se [it.body = body, it.formals = formals]
-                                                        -where [body = wrap /~replace/ {x: n[n] *[each.replace({i: '#{x}'})] /[fold.replace({x: x0, y: x})] -seq},
-                                                                f    = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: body}]],
+                      -where [r(n, formals, wrap, fold, each) = f /!$.compile -se [it.tree = body]
+                                                        -where [general_each             = each /~rmap/ replace
+                                                                                   -where [replace(t) = 
+
+                                                                replace_field_pair(e, p) = e /~rmap/ replace
+                                                                                   -where [pattern    = $.parse('_x #{p[0]} _y'),
+                                                                                           replace(t) = where [match = t /~match/ pattern] [match ? p[1] /~replace/ match : t]],
+
+                                                                body                     = wrap /~replace/ {x: n[n] *[each /~replace/ {i: '#{x}'}] /[fold /~replace/ {x: x0, y: x}] -seq},
+                                                                specialized              = field ? field /pairs /[body][x0 /-replace_field_pair/ x] -seq : body,
+                                                                f                        = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: body}]],
 
          high_level_v(base) = capture [unit = ref_compile(base, 'a'.qs,    'scale(a, 1 / norm(a))'.qs),
                                        proj = ref_compile(base, 'a, b'.qs, 'scale(b, dot(a, b) / dot(b, b))'.qs),
                                        orth = ref_compile(base, 'a, b'.qs, 'minus(a, scale(b, dot(a, b) / dot(b, b)))'.qs)]
 
-                      -where [ref_compile(functions, formals, body) = $.compile('(function (_formals) {return _e})'.qs /~replace/
-                                                                                {_formals: formals,
-                                                                                 _e:       body |~replace| functions %v*[new $.ref(x)] -seq})],
+                      -where [ref_compile(functions, formals, body) = $.compile('(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: new_body}) -se [it.tree = new_body]
+                                                              -where [new_body = body |~replace| functions %v*[new $.ref(x)] -seq]],
 
 // Matrix functions.
 // Most of these are standard textbook functions, though there some of them are peculiar to this data representation. In particular, all matrix coordinates are unrolled; this means that some
@@ -123,10 +124,8 @@ caterwaul.js_all()(function ($) {
          base_m_functions_for(n)          = capture [plus  = componentwise(n, 'a, b'.qs, 'a[i][j] + b[i][j]'.qs),  scale     = componentwise(n, 'a, b'.qs, 'a[i][j] * b'.qs),
                                                      minus = componentwise(n, 'a, b'.qs, 'a[i][j] - b[i][j]'.qs),  transpose = componentwise(n, 'a'.qs, 'a[j][i]'.qs),
 
-                                                     times = r3(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, '[x]'.qs, 'x, y'.qs, 'x'.qs, 'x + y'.qs, 'a[i][k] * b[k][j]'.qs),
+                                                     times = r3(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, '[x]'.qs, 'x, y'.qs, 'x'.qs, 'x + y'.qs, 'a[i][k] * b[k][j]'.qs)]
 
-                                                     determinant = r3(n, 'a'.qs, 
-
-                                                                                               ]})(caterwaul);
+                                    -where [componentwise() = null, r3() = null]]})(caterwaul);
 
 // Generated by SDoc 

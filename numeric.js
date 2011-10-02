@@ -22,6 +22,24 @@
   // | using [caterwaul.merge({}, caterwaul.linear.vector(3, 'v3'), caterwaul.linear.vector(4, 'v4'))]
 
 caterwaul.js_all()(function ($) {
+  $.linear = capture [vector = generator(base_v, composite_v), matrix = generator(base_m, composite_m), scalar_field = scalar_field, complex_field = complex_field],
+
+  where [generator(base, composite)(n, prefix, field) = {} /compiled_base /-$.merge/ composite(compiled_base, f) /-rename/ prefix -where [f             = field || scalar_field,
+                                                                                                                                          compiled_base = base(n, f)],
+         rename(o, prefix)        = o %k*['#{prefix || ""}#{x}'] -seq,
+
+         scalar_field             = {zero: '0'.qs, one: '1'.qs, '+': '_x + _y'.qs, '-': '_x - _y'.qs, '*': '_x * _y'.qs, '/': '_x / _y'.qs, 'u~': 'Math.sqrt(_x)'.qs},
+         complex_field            = {zero:  '{r: 0, i: 0}'.qs, one: '{r: 1, i: 0}'.qs,
+                                     '+':  '{r: _x.r + _y.r,                                              i: _x.i + _y.i}'.qs,
+                                     '-':  '{r: _x.r - _y.r,                                              i: _x.i - _y.i}'.qs,
+                                     '*':  '{r: _x.r * _x.r - _x.i * _y.i,                                i: 2 * _x.i * _y.i}'.qs,
+                                     '/':  '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i),        i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs,
+                                     'u~': '{r: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) + _x.r) / 2), i: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) - _x.r) / 2)}'.qs},
+
+         field_rewrite(e, field)  = e /~pmap/ visit -where [pattern_for(s) = /^\w+$/.test(s) ? $.parse(s) : /^u/.test(s) ? $.parse('#{s /~substr/ 1}_x') : $.parse('_x #{s} _y'),
+                                                            patterns       = field /pairs *[[x[0], pattern_for(x[0])]] /object -seq,
+                                                            visit(node)    = field /~hasOwnProperty/ node.data ? replace(node, patterns[node.data]) : node,
+                                                            replace(n, p)  = template /~replace/ match -where [template = field[n.data], match = p /~match/ n]],
 
 // Vector functions.
 // Each function is implemented in terms of its structure. Simple componentwise functions are specified by providing an expression to use for each component, where a wildcard 'i' will be replaced
@@ -66,25 +84,6 @@ caterwaul.js_all()(function ($) {
   // If you want your functions to be optimized, then you should define them with a '.tree' attribute that points to the syntax tree of their return value. This lets optimization stages access
 //   their closure state and potentially eliminate the function call altogether.
 
-  $.linear = capture [vector = generator(base_v, composite_v), matrix = generator(base_m, composite_m), scalar_field = scalar_field, complex_field = complex_field],
-
-  where [generator(base, composite)(n, prefix, field) = {} /compiled_base /-$.merge/ composite(compiled_base, f) /-rename/ prefix -where [f             = field || scalar_field,
-                                                                                                                                          compiled_base = base(n, f)],
-         rename(o, prefix)        = o %k*['#{prefix || ""}#{x}'] -seq,
-
-         scalar_field             = {zero: '0'.qs, one: '1'.qs, '+': '_x + _y'.qs, '-': '_x - _y'.qs, '*': '_x * _y'.qs, '/': '_x / _y'.qs, 'u~': 'Math.sqrt(_x)'.qs},
-         complex_field            = {zero:  '{r: 0, i: 0}'.qs, one: '{r: 1, i: 0}'.qs,
-                                     '+':  '{r: _x.r + _y.r,                                              i: _x.i + _y.i}'.qs,
-                                     '-':  '{r: _x.r - _y.r,                                              i: _x.i - _y.i}'.qs,
-                                     '*':  '{r: _x.r * _x.r - _x.i * _y.i,                                i: 2 * _x.i * _y.i}'.qs,
-                                     '/':  '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i),        i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs,
-                                     'u~': '{r: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) + _x.r) / 2), i: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) - _x.r) / 2)}'.qs},
-
-         field_rewrite(e, field)  = e /~pmap/ visit -where [pattern_for(s) = /^\w+$/.test(s) ? $.parse(s) : /^u/.test(s) ? $.parse('#{s /~substr/ 1}_x') : $.parse('_x #{s} _y'),
-                                                            patterns       = field /pairs *[[x[0], pattern_for(x[0])]] /object -seq,
-                                                            visit(node)    = field /~hasOwnProperty/ node.data ? replace(node, patterns[node.data]) : node,
-                                                            replace(n, p)  = template /~replace/ match -where [template = field[n.data], match = p /~match/ n]],
-
          base_v(n, field)         = capture [plus  = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] + b[i]'.qs),  times = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b[i]'.qs),
                                              minus = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] - b[i]'.qs),  scale = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b'.qs),
                                              dot   = r(n, 'a, b'.qs, 'x'.qs, 'x + y'.qs, 'a[i] * b[i]'.qs),   norm  = r(n, 'a'.qs, '~(x)'.qs, 'x + y'.qs, 'a[i] * a[i]'.qs),
@@ -92,16 +91,16 @@ caterwaul.js_all()(function ($) {
                                              macv  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b[i] * c[i]'.qs),
                                              macs  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b * c[i]'.qs)]
 
-                            -where [r(n, formals, wrap, fold, each) = f /!$.compile -se [it.tree = specialized]
+                            -where [r(n, formals, wrap, fold, each) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: specialized} /!$.compile
+                                                                      -se [it.tree = specialized]
                                                               -where [body        = wrap /~replace/ {x: n[n] *[each /~replace/ {i: '#{x}'}] /[fold /~replace/ {x: x0, y: x}] -seq},
-                                                                      specialized = body /-field_rewrite/ field,
-                                                                      f           = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: specialized}]],
+                                                                      specialized = body /-field_rewrite/ field]],
 
          composite_v(base, field) = capture [unit = ref_compile(base, 'a'.qs,    'scale(a, one / norm(a))'.qs),
                                              proj = ref_compile(base, 'a, b'.qs, 'scale(b, dot(a, b) / dot(b, b))'.qs),
                                              orth = ref_compile(base, 'a, b'.qs, 'minus(a, scale(b, dot(a, b) / dot(b, b)))'.qs)]
 
-                            -where [ref_compile(functions, formals, body) = $.compile('(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: new_body})
+                            -where [ref_compile(functions, formals, body) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: new_body} /!$.compile
                                                                             -se [it.tree = new_body]
                                                                     -where [specialized = body /-field_rewrite/ field,
                                                                             new_body    = specialized |~replace| functions %v*[new $.ref(x)] -seq]],

@@ -1,142 +1,52 @@
-// Linear algebra library | Spencer Tipping
-// Licensed under the terms of the MIT source code license
-
-// Introduction.
-// This module provides various functions for doing vector and matrix algebra. It is more oriented towards generating new values than it is towards solving equations. It represents all matrices
-// and vectors as arrays that can be manipulated with the sequence macro library. This representation is not particularly fast when used directly, but the accompanying numerical compiler can
-// reduce memory allocation to improve performance significantly. All operations in this library are nondestructive.
-
-// Matrices are represented as nested arrays in row-major order. This means that x[1][2] returns the entry in the second row, third column. All matrices have the invariant that they are properly
-// rectangular; that is, all row arrays are the same length.
-
-  // Interface.
-//   This vector library generalizes to an arbitrary number of coordinates, but the compiled code contains no loops. Instead, you instantiate an N-dimensional copy of the library and it compiles
-//   specialized functions. So, for example, the compiled function for componentwise addition in three-dimensional space is vplus(a, b) = [a[0] + b[0], a[1] + b[1], a[2] + b[2]]. Generally you'd
-//   combine this with a using[] macro to eliminate duplicate compilation:
-
-  // | reflect(a, normal) = a /-vproj/ normal /-vscale/ -2 /-vplus/ a,
-//     using [caterwaul.linear.vector(3, 'v')]
-
-  // If you're using multiple dimensions at once, you can customize the prefix to distinguish the functions:
-
-  // | using [caterwaul.merge({}, caterwaul.linear.vector(3, 'v3'), caterwaul.linear.vector(4, 'v4'))]
-
-caterwaul.js_all()(function ($) {
-  $.linear = capture [vector = generator(base_v, composite_v), matrix = generator(base_m, composite_m), scalar_field = scalar_field, complex_field = complex_field],
-
-  where [generator(base, composite)(n, prefix, field) = {} /compiled_base /-$.merge/ composite(compiled_base, f) /-rename/ prefix -where [f             = field || scalar_field,
-                                                                                                                                          compiled_base = base(n, f)],
-         rename(o, prefix)        = o %k*['#{prefix || ""}#{x}'] -seq,
-
-         scalar_field             = {zero: '0'.qs, one: '1'.qs, '+': '_x + _y'.qs, '-': '_x - _y'.qs, '*': '_x * _y'.qs, '/': '_x / _y'.qs, 'u~': 'Math.sqrt(_x)'.qs},
-         complex_field            = {zero:  '{r: 0, i: 0}'.qs, one: '{r: 1, i: 0}'.qs,
-                                     '+':  '{r: _x.r + _y.r,                                              i: _x.i + _y.i}'.qs,
-                                     '-':  '{r: _x.r - _y.r,                                              i: _x.i - _y.i}'.qs,
-                                     '*':  '{r: _x.r * _x.r - _x.i * _y.i,                                i: 2 * _x.i * _y.i}'.qs,
-                                     '/':  '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i),        i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs,
-                                     'u~': '{r: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) + _x.r) / 2), i: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) - _x.r) / 2)}'.qs},
-
-         field_rewrite(e, field)  = e /~pmap/ visit -where [pattern_for(s) = /^\w+$/.test(s) ? $.parse(s) : /^u/.test(s) ? $.parse('#{s /~substr/ 1}_x') : $.parse('_x #{s} _y'),
-                                                            patterns       = field /pairs *[[x[0], pattern_for(x[0])]] /object -seq,
-                                                            visit(node)    = field /~hasOwnProperty/ node.data ? replace(node, patterns[node.data]) : node,
-                                                            replace(n, p)  = template /~replace/ match -where [template = field[n.data], match = p /~match/ n]],
-
-// Vector functions.
-// Each function is implemented in terms of its structure. Simple componentwise functions are specified by providing an expression to use for each component, where a wildcard 'i' will be replaced
-// by the index of that coordinate. This expression is then used in a reduction, which is some structure that combines components into a single value. For example, this is the reduction for
-// 'plus':
-
-// | plus = reduction(3,                   // <- number of dimensions
-//                    'a, b'.qs,           // <- formal parameters, quoted as syntax
-//                    '[x]'.qs,            // <- result expression
-//                    'x, y'.qs,           // <- binary combination of intermediate values
-//                    'a[i] + b[i]'.qs)    // <- componentwise combination
-
-// Most simple vector functions can be defined this way. Others, however, are better defined in terms of each other; for instance, the 'proj' and 'orth' functions never access the vectors
-// directly since they are defined in terms of the dot product and vector-scalar multiplication. The obvious solution is to first create the reduction functions and then define things like 'proj'
-// and 'orth' to close over them; however, this is problematic from a compilation perspective since we would need the closure state to know the dimension of 'proj' and 'orth'. To compensate, the
-// syntax tree is stored as an attribute of the compiled function, and the syntax tree contains refs which bind all closure dependencies.
-
-// Note that cross products aren't handled by the vector library; these are considered to be matrix functions, and the determinant formula is computed specifically for a given matrix size rather
-// than being explicitly generalized.
-
-  // Defining alternative componentwise semantics.
-//   An extra parameter, 'field', lets you redefine algebraic field operations. This can be useful if you want to build vectors or matrices over non-scalar data structures. In particular, if you
-//   specify this parameter you'll need to provide replacements for +, -, *, /, and optionally a square root function, which is counterintuitively denoted as a unary one's complement. Your field
-//   must also define zero and one. Here's an example for working with complex numbers:
-
-  // | my_field = {zero: '{r: 0, i: 0}'.qs,
-//                 one:  '{r: 1, i: 0}'.qs,
-//                 '+':  '{r: _x.r + _y.r, i: _x.i + _y.i}'.qs,
-//                 '-':  '{r: _x.r - _y.r, i: _x.i - _y.i}'.qs,
-//                 '*':  '{r: _x.r * _x.r - _x.i * _y.i, i: 2 * _x.i * _y.i}'.qs,
-//                 '/':  '{r: (_x.r*_y.r + _x.i*_y.i) / (_y.r*_y.r + _y.i*_y.i), i: (_x.i*_y.r - _x.r*_y.i) / (_y.r*_y.r + _y.i*_y.i)}'.qs,
-//                 'u~': '{r: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) + _x.r) / 2), i: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) - _x.r) / 2)}'.qs}
-
-  // These expressions will then replace the real-number field used by default. Note here that the complex conjugate operation has duplicated subexpressions; _y.r*_y.r + _y.i*_y.i is computed
-//   twice. This won't be a problem in the compiled function because all of the expressions are subject to common subexpression elimination prior to being compiled. (This is the mechanism used to
-//   optimize matrix array access as well.) Because of this optimization, it's very important that any side-effects of each subexpression be idempotent and commutative.
-
-  // You can reuse existing functions as well as defining them on the fly. You should do this using syntax refs:
-
-  // | my_field = {'+': 'f(_x, _y)'.qs.replace({f: new caterwaul.ref(my_function)}), ...}
-
-  // If you want your functions to be optimized, then you should define them with a '.tree' attribute that points to the syntax tree of their return value. This lets optimization stages access
-//   their closure state and potentially eliminate the function call altogether.
-
-         base_v(n, field)         = capture [plus  = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] + b[i]'.qs),  times = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b[i]'.qs),
-                                             minus = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] - b[i]'.qs),  scale = r(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, 'a[i] * b'.qs),
-                                             dot   = r(n, 'a, b'.qs, 'x'.qs, 'x + y'.qs, 'a[i] * b[i]'.qs),   norm  = r(n, 'a'.qs, '~(x)'.qs, 'x + y'.qs, 'a[i] * a[i]'.qs),
-
-                                             macv  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b[i] * c[i]'.qs),
-                                             macs  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b * c[i]'.qs)]
-
-                            -where [r(n, formals, wrap, fold, each) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: specialized} /!$.compile
-                                                                      -se [it.tree = specialized]
-                                                              -where [body        = wrap /~replace/ {x: n[n] *[each /~replace/ {i: '#{x}'}] /[fold /~replace/ {x: x0, y: x}] -seq},
-                                                                      specialized = body /-field_rewrite/ field]],
-
-         composite_v(base, field) = capture [unit = ref_compile(base, 'a'.qs,    'scale(a, one / norm(a))'.qs),
-                                             proj = ref_compile(base, 'a, b'.qs, 'scale(b, dot(a, b) / dot(b, b))'.qs),
-                                             orth = ref_compile(base, 'a, b'.qs, 'minus(a, scale(b, dot(a, b) / dot(b, b)))'.qs)]
-
-                            -where [ref_compile(functions, formals, body) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: new_body} /!$.compile
-                                                                            -se [it.tree = new_body]
-                                                                    -where [specialized = body /-field_rewrite/ field,
-                                                                            new_body    = specialized |~replace| functions %v*[new $.ref(x)] -seq]],
-
-// Matrix functions.
-// Most of these are standard textbook functions, though there some of them are peculiar to this data representation. In particular, all matrix coordinates are unrolled; this means that some
-// weird optimizations can happen. Vector functions were essentially flat; there was very little repetitive access to sub-arrays. This isn't true of matrices, however. Consider a simple
-// coordinate-wise addition function over 2x2 matrices:
-
-// | plus(a, b) = [[a[0][0] + b[0][0], a[0][1] + b[0][1]],
-//                 [a[1][0] + b[1][0], a[1][1] + b[1][1]]]
-
-// Each top-level sub-array in a and b is accessed twice (that is, a[0], a[1], b[0], and b[1]), and unless the Javascript runtime is clever enough to prove their invariance, these loads will
-// happen twice. Rather than explicitly loading the sub-arrays twice, better is to perform common subexpression elimination and allocate local variables to cache the lookups:
-
-// | plus = function (a, b) {
-//     var a0 = a[0], a1 = a[1], b0 = b[0], b1 = b[1];
-//     return [[a0[0] + b0[0], a0[1] + b0[1]],
-//             [a1[0] + b1[0], a1[1] + b1[1]]];
-//   };
-
-// Matrix functions are structured roughly the same way as vector functions from a compilation perspective. It's a bit more complicated here because there are two levels of reduction instead of
-// one. Some things are also complexified by conditions on the matrix size; for instance, the determinant only exists for square matrices. (Fortunately, this library only provides functions for
-// square matrices.)
-
-// There are some compromises made for performance. In particular, matrix and vector functions are untyped, so it doesn't make sense to compute a cross product in the usual vector way. (That is,
-// set the top row of the matrix to contain vectors instead of scalars.) Instead, the cross product is a special form of the determinant; this preserves the untyped representation. In addition to
-// things like this, various safety rules are ignored; for instance, there is no size-checking despite the fact that every function operates only on matrices of specific dimensions.
-
-         base_m(n, field)          = capture [plus  = componentwise(n, 'a, b'.qs, 'a[i][j] + b[i][j]'.qs),  scale     = componentwise(n, 'a, b'.qs, 'a[i][j] * b'.qs),
-                                              minus = componentwise(n, 'a, b'.qs, 'a[i][j] - b[i][j]'.qs),  transpose = componentwise(n, 'a'.qs, 'a[j][i]'.qs),
-
-                                              times = r3(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, '[x]'.qs, 'x, y'.qs, 'x'.qs, 'x + y'.qs, 'a[i][k] * b[k][j]'.qs)]
-
-                             -where [componentwise() = null, r3() = null],
-
-         composite_m(base, field)  = capture [transpose = null]]})(caterwaul);
-
-// Generated by SDoc 
+caterwaul.module( 'numeric' ,function($) { (function( ) {var generator=function(base,composite) {;
+return function(n,prefix,field) {;
+return(function( ) {var f=field||scalar_field,compiled_base=base(n,f) ;
+return(rename($.merge( { } ,compiled_base,composite(compiled_base,f) ) ,prefix) ) } ) .call(this) } } ,rename=function(o,prefix) {;
+return(function(xs) {var x,x0,xi,xl,xr;
+var xr=new xs.constructor() ;
+for(var x in xs)if(Object.prototype.hasOwnProperty.call(xs,x) )xr[ ( '' + (prefix|| "" ) + '' + (x) + '' ) ] =xs[x] ;
+return xr} ) .call(this,o) } ,scalar_field= {zero:ref_h_Kpe3zX8r6h9U$FzfJgfups,one:ref_i_Kpe3zX8r6h9U$FzfJgfups, '+' :ref_j_Kpe3zX8r6h9U$FzfJgfups, '-' :ref_k_Kpe3zX8r6h9U$FzfJgfups, '*' :ref_l_Kpe3zX8r6h9U$FzfJgfups, '/' :ref_m_Kpe3zX8r6h9U$FzfJgfups, 'u~' :ref_n_Kpe3zX8r6h9U$FzfJgfups} ,complex_field= {zero:ref_o_Kpe3zX8r6h9U$FzfJgfups,one:ref_p_Kpe3zX8r6h9U$FzfJgfups, '+' :ref_q_Kpe3zX8r6h9U$FzfJgfups, '-' :ref_r_Kpe3zX8r6h9U$FzfJgfups, '*' :ref_s_Kpe3zX8r6h9U$FzfJgfups, '/' :ref_t_Kpe3zX8r6h9U$FzfJgfups, 'u~' :ref_u_Kpe3zX8r6h9U$FzfJgfups} ,field_rewrite=function(e,field) {;
+return(function( ) {var pattern_for=function( /* unary , node */s) {;
+return/^\w+$/ .test(s) ?$.parse(s) : /^u/ .test(s) ?$.parse( ( '' + ( (s) .substr( /* unary , node */1) ) + '_x' ) ) :$.parse( ( '_x ' + (s) + ' _y' ) ) } ,patterns= (function(o) {for(var r= { } ,i=0,l=o.length,x;
+i<l;
+ ++i)x=o[i] ,r[x[0] ] =x[1] ;
+return r} ) .call(this, ( (function(xs) {var x,x0,xi,xl,xr;
+for(var xr=new xs.constructor() ,xi=0,xl=xs.length;
+xi<xl;
+ ++xi)x=xs[xi] ,xr.push( ( [x[0] ,pattern_for(x[0] ) ] ) ) ;
+return xr} ) .call(this, (function(o) {var ps= [ ] ;
+for(var k in o)Object.prototype.hasOwnProperty.call(o,k) &&ps.push( [k,o[k] ] ) ;
+return ps} ) .call(this, (field) ) ) ) ) ,visit=function( /* unary , node */node) {;
+return(field) .hasOwnProperty( /* unary , node */node.data) ?replace(node,patterns[node.data] ) :node} ,replace=function(n,p) {;
+return(function( ) {var template=field[n.data] ,match= (p) .match( /* unary , node */n) ;
+return( (template) .replace( /* unary , node */match) ) } ) .call(this) } ;
+return( (e) .pmap( /* unary , node */visit) ) } ) .call(this) } ,base_v=function(n,field) {;
+return(function( ) {var r=function(n,formals,wrap,fold,each) {;
+return(function( ) {var body= (wrap) .replace( /* unary , node */ {x: (function(xs) {var x,x0,xi,xl,xr;
+for(var x0=xs[0] ,xi=1,xl=xs.length;
+xi<xl;
+ ++xi)x=xs[xi] ,x0= ( (fold) .replace( /* unary , node */ {x:x0,y:x} ) ) ;
+return x0} ) .call(this, (function(xs) {var x,x0,xi,xl,xr;
+for(var xr=new xs.constructor() ,xi=0,xl=xs.length;
+xi<xl;
+ ++xi)x=xs[xi] ,xr.push( ( (each) .replace( /* unary , node */ {i: ( '' + (x) + '' ) } ) ) ) ;
+return xr} ) .call(this, (function(i,u,s) {if( (u-i) *s<=0)return[ ] ;
+for(var r= [ ] ,d=u-i;
+d>0?i<u:i>u;
+i+=s)r.push(i) ;
+return r} ) ( (0) , (n) , (1) ) ) ) } ) ,specialized=field_rewrite(body,field) ;
+return( (function(it) {return(it.tree=specialized) ,it} ) .call(this, ($.compile( /* unary , node */ (ref_v_Kpe3zX8r6h9U$FzfJgfups) .replace( /* unary , node */ {_formals:formals,_e:specialized} ) ) ) ) ) } ) .call(this) } ;
+return( {plus:r(n,ref_x_Kpe3zX8r6h9U$FzfJgfups,ref_y_Kpe3zX8r6h9U$FzfJgfups,ref_z_Kpe3zX8r6h9U$FzfJgfups,ref_10_Kpe3zX8r6h9U$FzfJgfups) ,times:r(n,ref_11_Kpe3zX8r6h9U$FzfJgfups,ref_12_Kpe3zX8r6h9U$FzfJgfups,ref_13_Kpe3zX8r6h9U$FzfJgfups,ref_14_Kpe3zX8r6h9U$FzfJgfups) ,minus:r(n,ref_15_Kpe3zX8r6h9U$FzfJgfups,ref_16_Kpe3zX8r6h9U$FzfJgfups,ref_17_Kpe3zX8r6h9U$FzfJgfups,ref_18_Kpe3zX8r6h9U$FzfJgfups) ,scale:r(n,ref_19_Kpe3zX8r6h9U$FzfJgfups,ref_1a_Kpe3zX8r6h9U$FzfJgfups,ref_1b_Kpe3zX8r6h9U$FzfJgfups,ref_1c_Kpe3zX8r6h9U$FzfJgfups) ,dot:r(n,ref_1d_Kpe3zX8r6h9U$FzfJgfups,ref_1e_Kpe3zX8r6h9U$FzfJgfups,ref_1f_Kpe3zX8r6h9U$FzfJgfups,ref_1g_Kpe3zX8r6h9U$FzfJgfups) ,norm:r(n,ref_1h_Kpe3zX8r6h9U$FzfJgfups,ref_1i_Kpe3zX8r6h9U$FzfJgfups,ref_1j_Kpe3zX8r6h9U$FzfJgfups,ref_1k_Kpe3zX8r6h9U$FzfJgfups) ,macv:r(n,ref_1l_Kpe3zX8r6h9U$FzfJgfups,ref_1m_Kpe3zX8r6h9U$FzfJgfups,ref_1n_Kpe3zX8r6h9U$FzfJgfups,ref_1o_Kpe3zX8r6h9U$FzfJgfups) ,macs:r(n,ref_1p_Kpe3zX8r6h9U$FzfJgfups,ref_1q_Kpe3zX8r6h9U$FzfJgfups,ref_1r_Kpe3zX8r6h9U$FzfJgfups,ref_1s_Kpe3zX8r6h9U$FzfJgfups) } ) } ) .call(this) } ,composite_v=function(base,field) {;
+return(function( ) {var ref_compile=function(functions,formals,body) {;
+return(function( ) {var specialized=field_rewrite(body,field) ,new_body= (specialized) .replace( /* unary , node */ (function(xs) {var x,x0,xi,xl,xr;
+var xr=new xs.constructor() ;
+for(var k_b_Kpe3zX8r6h9U$FzfJgfups in xs)if(Object.prototype.hasOwnProperty.call(xs,k_b_Kpe3zX8r6h9U$FzfJgfups) )x=xs[k_b_Kpe3zX8r6h9U$FzfJgfups] ,xr[k_b_Kpe3zX8r6h9U$FzfJgfups] = (new $.ref(x) ) ;
+return xr} ) .call(this,functions) ) ;
+return( (function(it) {return(it.tree=new_body) ,it} ) .call(this, ($.compile( /* unary , node */ (ref_1t_Kpe3zX8r6h9U$FzfJgfups) .replace( /* unary , node */ {_formals:formals,_e:new_body} ) ) ) ) ) } ) .call(this) } ;
+return( {unit:ref_compile(base,ref_1v_Kpe3zX8r6h9U$FzfJgfups,ref_1w_Kpe3zX8r6h9U$FzfJgfups) ,proj:ref_compile(base,ref_1x_Kpe3zX8r6h9U$FzfJgfups,ref_1y_Kpe3zX8r6h9U$FzfJgfups) ,orth:ref_compile(base,ref_1z_Kpe3zX8r6h9U$FzfJgfups,ref_20_Kpe3zX8r6h9U$FzfJgfups) } ) } ) .call(this) } ,base_m=function(n,field) {;
+return(function( ) {var componentwise=function( /* unary , node */) {;
+return null} ,r3=function( /* unary , node */) {;
+return null} ;
+return( {plus:componentwise(n,ref_21_Kpe3zX8r6h9U$FzfJgfups,ref_22_Kpe3zX8r6h9U$FzfJgfups) ,scale:componentwise(n,ref_23_Kpe3zX8r6h9U$FzfJgfups,ref_24_Kpe3zX8r6h9U$FzfJgfups) ,minus:componentwise(n,ref_25_Kpe3zX8r6h9U$FzfJgfups,ref_26_Kpe3zX8r6h9U$FzfJgfups) ,transpose:componentwise(n,ref_27_Kpe3zX8r6h9U$FzfJgfups,ref_28_Kpe3zX8r6h9U$FzfJgfups) ,times:r3(n,ref_29_Kpe3zX8r6h9U$FzfJgfups,ref_2a_Kpe3zX8r6h9U$FzfJgfups,ref_2b_Kpe3zX8r6h9U$FzfJgfups,ref_2c_Kpe3zX8r6h9U$FzfJgfups,ref_2d_Kpe3zX8r6h9U$FzfJgfups,ref_2e_Kpe3zX8r6h9U$FzfJgfups,ref_2f_Kpe3zX8r6h9U$FzfJgfups,ref_2g_Kpe3zX8r6h9U$FzfJgfups) } ) } ) .call(this) } ,composite_m=function(base,field) {;
+return{ /* unary , node */transpose:null} } ;
+return($.linear= {vector:generator(base_v,composite_v) ,matrix:generator(base_m,composite_m) ,scalar_field:scalar_field,complex_field:complex_field} ) } ) .call(this) } ) ;

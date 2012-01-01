@@ -1,10 +1,10 @@
-Linear algebra library | Spencer Tipping
+Vector math library | Spencer Tipping
 Licensed under the terms of the MIT source code license
 
 Introduction.
-This module provides various functions for doing vector and matrix algebra. It is more oriented towards generating new values than it is towards solving equations. It represents all matrices
-and vectors as arrays that can be manipulated with the sequence macro library. This representation is not particularly fast when used directly, but the accompanying numerical compiler can
-reduce memory allocation to improve performance significantly. All operations in this library are nondestructive.
+This module provides various functions for doing vector math. It is more oriented towards generating new values than it is towards solving equations. It represents all matrices and vectors as
+arrays that can be manipulated with the sequence macro library. This representation is not particularly fast when used directly, but the accompanying numerical compiler can reduce memory
+allocation to improve performance significantly. All operations in this library are nondestructive; this makes the library implicitly SSA-friendly.
 
 Matrices are represented as nested arrays in row-major order. This means that x[1][2] returns the entry in the second row, third column. All matrices have the invariant that they are properly
 rectangular; that is, all row arrays are the same length.
@@ -15,18 +15,20 @@ rectangular; that is, all row arrays are the same length.
   combine this with a using[] macro to eliminate duplicate compilation:
 
   | reflect(a, normal) = a /-vproj/ normal /-vscale/ -2 /-vplus/ a,
-    using [caterwaul.linear.vector(3, 'v')]
+    using [caterwaul.vector(3, 'v')]
 
   If you're using multiple dimensions at once, you can customize the prefix to distinguish the functions:
 
-  | using [caterwaul.merge({}, caterwaul.linear.vector(3, 'v3'), caterwaul.linear.vector(4, 'v4'))]
+  | using [caterwaul.merge({}, caterwaul.vector(3, 'v3'), caterwaul.vector(4, 'v4'))]
 
-caterwaul.module('numeric', 'js_all', function ($) {
-  $.linear = capture [vector = generator(base_v, composite_v), matrix = generator(base_m, composite_m), scalar_field = scalar_field, complex_field = complex_field],
+caterwaul.module('vector', 'js_all', function ($) {
+  $.vector = generator(base_v, composite_v) /-$.merge/ capture[scalar_field = scalar_field, complex_field = complex_field, v3cross = v3cross],
 
   where [generator(base, composite)(n, prefix, field) = {} /compiled_base /-$.merge/ composite(compiled_base, f) /-rename/ prefix -where [f             = field || scalar_field,
                                                                                                                                           compiled_base = base(n, f)],
          rename(o, prefix)        = o %k*['#{prefix || ""}#{x}'] -seq,
+
+         compile_function(xs, e)  = '(function (_formals) {return _e})'.qs /~replace/ {_formals: xs, _e: e} /!$.compile -se [it.tree = e],
 
          scalar_field             = {zero: '0'.qs, one: '1'.qs, '+': '_x + _y'.qs, '-': '_x - _y'.qs, '*': '_x * _y'.qs, '/': '_x / _y'.qs, 'u~': 'Math.sqrt(_x)'.qs},
          complex_field            = {zero:  '{r: 0, i: 0}'.qs, one: '{r: 1, i: 0}'.qs,
@@ -40,6 +42,8 @@ caterwaul.module('numeric', 'js_all', function ($) {
                                                             patterns       = field /pairs *[[x[0], pattern_for(x[0])]] /object -seq,
                                                             visit(node)    = field /~hasOwnProperty/ node.data ? replace(node, patterns[node.data]) : node,
                                                             replace(n, p)  = template /~replace/ match -where [template = field[n.data], match = p /~match/ n]],
+
+         v3cross(field)           = 'a, b'.qs /-compile_function/ field_rewrite('[a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]'.qs, field),
 
 Vector functions.
 Each function is implemented in terms of its structure. Simple componentwise functions are specified by providing an expression to use for each component, where a wildcard 'i' will be replaced
@@ -57,9 +61,6 @@ directly since they are defined in terms of the dot product and vector-scalar mu
 and 'orth' to close over them; however, this is problematic from a compilation perspective since we would need the closure state to know the dimension of 'proj' and 'orth'. To compensate, the
 syntax tree is stored as an attribute of the compiled function, and the syntax tree contains refs which bind all closure dependencies.
 
-Note that cross products aren't handled by the vector library; these are considered to be matrix functions, and the determinant formula is computed specifically for a given matrix size rather
-than being explicitly generalized.
-
   Defining alternative componentwise semantics.
   An extra parameter, 'field', lets you redefine algebraic field operations. This can be useful if you want to build vectors or matrices over non-scalar data structures. In particular, if you
   specify this parameter you'll need to provide replacements for +, -, *, /, and optionally a square root function, which is counterintuitively denoted as a unary one's complement. Your field
@@ -74,8 +75,8 @@ than being explicitly generalized.
                 'u~': '{r: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) + _x.r) / 2), i: Math.sqrt((Math.sqrt(_x.r*_x.r + _x.i*_x.i) - _x.r) / 2)}'.qs}
 
   These expressions will then replace the real-number field used by default. Note here that the complex conjugate operation has duplicated subexpressions; _y.r*_y.r + _y.i*_y.i is computed
-  twice. This won't be a problem in the compiled function because all of the expressions are subject to common subexpression elimination prior to being compiled. (This is the mechanism used to
-  optimize matrix array access as well.) Because of this optimization, it's very important that any side-effects of each subexpression be idempotent and commutative.
+  twice. This won't be a problem in the compiled function because all of the expressions are subject to common subexpression elimination prior to being compiled. Because of this optimization,
+  it's very important that any side-effects of each subexpression be idempotent and commutative.
 
   You can reuse existing functions as well as defining them on the fly. You should do this using syntax refs:
 
@@ -91,8 +92,7 @@ than being explicitly generalized.
                                              macv  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b[i] * c[i]'.qs),
                                              macs  = r(n, 'a, b, c'.qs, '[x]'.qs, '[x, y]'.qs, 'a[i] + b * c[i]'.qs)]
 
-                            -where [r(n, formals, wrap, fold, each) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: specialized} /!$.compile
-                                                                      -se [it.tree = specialized]
+                            -where [r(n, formals, wrap, fold, each) = formals /-compile_function/ specialized
                                                               -where [body        = wrap /~replace/ {x: n[n] *[each /~replace/ {i: '#{x}'}] /[fold /~replace/ {x: x0, y: x}] -seq},
                                                                       specialized = body /-field_rewrite/ field]],
 
@@ -100,41 +100,6 @@ than being explicitly generalized.
                                              proj = ref_compile(base, 'a, b'.qs, 'scale(b, dot(a, b) / dot(b, b))'.qs),
                                              orth = ref_compile(base, 'a, b'.qs, 'minus(a, scale(b, dot(a, b) / dot(b, b)))'.qs)]
 
-                            -where [ref_compile(functions, formals, body) = '(function (_formals) {return _e})'.qs /~replace/ {_formals: formals, _e: new_body} /!$.compile
-                                                                            -se [it.tree = new_body]
+                            -where [ref_compile(functions, formals, body) = formals /-compile_function/ new_body
                                                                     -where [specialized = body /-field_rewrite/ field,
-                                                                            new_body    = specialized |~replace| functions %v*[new $.ref(x)] -seq]],
-
-Matrix functions.
-Most of these are standard textbook functions, though there some of them are peculiar to this data representation. In particular, all matrix coordinates are unrolled; this means that some
-weird optimizations can happen. Vector functions were essentially flat; there was very little repetitive access to sub-arrays. This isn't true of matrices, however. Consider a simple
-coordinate-wise addition function over 2x2 matrices:
-
-| plus(a, b) = [[a[0][0] + b[0][0], a[0][1] + b[0][1]],
-                [a[1][0] + b[1][0], a[1][1] + b[1][1]]]
-
-Each top-level sub-array in a and b is accessed twice (that is, a[0], a[1], b[0], and b[1]), and unless the Javascript runtime is clever enough to prove their invariance, these loads will
-happen twice. Rather than explicitly loading the sub-arrays twice, better is to perform common subexpression elimination and allocate local variables to cache the lookups:
-
-| plus = function (a, b) {
-    var a0 = a[0], a1 = a[1], b0 = b[0], b1 = b[1];
-    return [[a0[0] + b0[0], a0[1] + b0[1]],
-            [a1[0] + b1[0], a1[1] + b1[1]]];
-  };
-
-Matrix functions are structured roughly the same way as vector functions from a compilation perspective. It's a bit more complicated here because there are two levels of reduction instead of
-one. Some things are also complexified by conditions on the matrix size; for instance, the determinant only exists for square matrices. (Fortunately, this library only provides functions for
-square matrices.)
-
-There are some compromises made for performance. In particular, matrix and vector functions are untyped, so it doesn't make sense to compute a cross product in the usual vector way. (That is,
-set the top row of the matrix to contain vectors instead of scalars.) Instead, the cross product is a special form of the determinant; this preserves the untyped representation. In addition to
-things like this, various safety rules are ignored; for instance, there is no size-checking despite the fact that every function operates only on matrices of specific dimensions.
-
-         base_m(n, field)          = capture [plus  = componentwise(n, 'a, b'.qs, 'a[i][j] + b[i][j]'.qs),  scale     = componentwise(n, 'a, b'.qs, 'a[i][j] * b'.qs),
-                                              minus = componentwise(n, 'a, b'.qs, 'a[i][j] - b[i][j]'.qs),  transpose = componentwise(n, 'a'.qs, 'a[j][i]'.qs),
-
-                                              times = r3(n, 'a, b'.qs, '[x]'.qs, 'x, y'.qs, '[x]'.qs, 'x, y'.qs, 'x'.qs, 'x + y'.qs, 'a[i][k] * b[k][j]'.qs)]
-
-                             -where [componentwise() = null, r3() = null],
-
-         composite_m(base, field)  = capture [transpose = null]]});
+                                                                            new_body    = specialized |~replace| functions %v*[new $.ref(x)] -seq]]]});

@@ -1,0 +1,10 @@
+#!./vector-waul -x
+
+caterwaul(':all')(function () {
+  process.stdout.write('caterwaul.module("numeric-offline-#{dimensions}", function ($) {$.numeric_offline_#{dimensions} = {#{object_rows.join(",\n")}}});\n'),
+  where [row(k, v)              = '#{k}: #{serialize_function(v)}',
+         gensym_erased_bound(t) = result /~replace/ caterwaul.gensym_rename_table(result) -where [result = caterwaul.late_bound_tree(t, null, {expression_ref_table: false})],
+         serialize_function(v)  = v.tree ? gensym_erased_bound(v.tree) : v,
+         dimensions             = +process.argv[4],
+         prefix                 = process.argv[5],
+         object_rows            = caterwaul.vector(dimensions, prefix) /pairs *[row(x[0], x[1])] -seq]})();
